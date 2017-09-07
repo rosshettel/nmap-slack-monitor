@@ -1,0 +1,61 @@
+#!/bin/bash -u
+
+: ${TARGET:="192.168.1.0/24"}
+: ${OPTIONS:='-T4 --open --exclude-ports 25'}
+: ${INTERVAL:="3600"}
+: ${SLACKWEBHOOK?"SLACKWEBHOOK must be set"}
+: ${SLACKUSER:="nmap monitor"}
+: ${SLACKICON:=":nmap:"}
+
+function postToSlack {
+    curl -s -X POST --data-urlencode "payload={\"username\": \"$SLACKUSER\", \"icon_emoji\": \"$ICONEMOJI\", \"text\": \"$1\"}" $SLACKWEBHOOK > /dev/null &
+}
+
+# if networks is cidr, split into targets, otherwise set target as one
+if ! TARGETS=$(prips $TARGET 2>/dev/null); then
+    TARGETS=$TARGET
+fi
+
+while true; do
+    START_TIME=$(date +%s)
+
+    DATE=`date +%Y-%m-%d_%H-%M-%S`
+    for TARGET in ${TARGETS}; do
+        echo ''
+        echo $(date) "- starting ${TARGET}"
+
+        CUR_LOG=scans/scan-${TARGET/\//-}-${DATE}
+        PREV_LOG=scans/scan-${TARGET/\//-}-prev
+        DIFF_LOG=scans/scan-${TARGET/\//-}-diff
+
+        # Scan the target
+        nmap ${OPTIONS} ${TARGET} -oX ${CUR_LOG} >/dev/null
+
+        # If there's a previous log, diff it
+        if [ -e ${PREV_LOG} ]; then
+            # Exclude the Nmap version and current date - the date always changes
+            ndiff ${PREV_LOG} ${CUR_LOG} | egrep -v '^(\+|-)N' > ${DIFF_LOG}
+            if [ -s ${DIFF_LOG} ]; then
+                printf "Changes Detected, Sending to Slack."
+                OPENPORTS="$(nmap -sV ${TARGET} | grep open | grep -v "#" > openports.txt)"
+                echo "Changes were detected on ${TARGET}. The following ports are now open: \n```$OPENPORTS```"
+                postToSlack "Changes were detected on ${TARGET}. The following ports are now open: \n```$OPENPORTS```"
+
+                # Set the current nmap log file to reflect the last date changed
+                ln -sf ${CUR_LOG} ${PREV_LOG}
+            else
+                # No changes so remove our current log
+                printf "No Changes Detected."
+                rm ${CUR_LOG}
+            fi
+            rm ${DIFF_LOG}
+        else
+            # Create the previous scan log
+            ln -sf ${CUR_LOG} ${PREV_LOG}
+        fi
+    done
+
+    END_TIME=$(date +%s)
+    echo $(date) "- finished all targets in" $(expr ${END_TIME} - ${START_TIME}) "second(s)"
+    sleep ${INTERVAL}
+done
