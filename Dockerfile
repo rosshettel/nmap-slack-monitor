@@ -12,5 +12,4 @@ COPY ./bin /usr/local/bin/
 WORKDIR /nmap
 RUN mkdir scans
 
-#CMD scan-network
-CMD ash
+CMD scan-network
